@@ -1,0 +1,69 @@
+alias: Play TTS Message - Media Player - v2
+sequence:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ 'openwakeword/ack.mp3' in message }}"
+        sequence:
+          - data:
+              entity_id: "{{ player }}"
+              media_content_type: music
+              media_content_id: |
+                {% if 'https://your_domain_external.com' in message %}
+                  {{ message | replace('https://your_domain_external.com','https://hyour_domain_internal:8123') }}
+                {% else %}
+                  {{ message }}
+                {% endif %}
+              announce: true
+              extra:
+                volume: 40
+            action: media_player.play_media
+          - delay:
+              hours: 0
+              minutes: 0
+              seconds: 1
+              milliseconds: 500
+      - conditions:
+          - condition: template
+            value_template: "{{ 'api/tts_proxy/' in message }}"
+        sequence:
+          - target:
+              entity_id: input_boolean.tts_playing
+            action: input_boolean.turn_on
+            data: {}
+          - data:
+              entity_id: "{{ player }}"
+              media_content_type: music
+              media_content_id: |
+                {% if 'https://your_domain_external.com' in message %}
+                  {{ message | replace('https://your_domain_external.com','https://hyour_domain_internal:8123') }}
+                {% else %}
+                  {{ message }}
+                {% endif %}
+              announce: true
+              extra:
+                volume: 40
+            action: media_player.play_media
+          - variables:
+              tts_wpm: 170
+              computed_delay: >
+                {% set words = (states('input_text.tts_transcript') |
+                string).split() | length %} {% set secs  = (words / tts_wpm *
+                60) | round(0, 'ceil') %} {{ ([secs, 2, 30] | sort)[1] | int }}
+          - action: input_text.set_value
+            continue_on_error: true
+            metadata: {}
+            data:
+              value: ""
+            target:
+              entity_id: input_text.tts_transcript
+          - delay:
+              seconds: "{{ computed_delay }}"
+          - target:
+              entity_id: input_boolean.tts_playing
+            action: input_boolean.turn_off
+            data: {}
+mode: queued
+trace:
+  stored_traces: 50
+max: 2

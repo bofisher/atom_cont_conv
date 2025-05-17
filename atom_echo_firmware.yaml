@@ -1,0 +1,296 @@
+substitutions:
+  bool_tts_is_playing: input_boolean.tts_playing
+  ding_sound: "https://your_domain_internal:8123/local/custom_media/openwakeword/ack.mp3"
+  micro_wake_word_model: hey_jarvis
+
+# Enable Home Assistant API
+  
+##########
+esphome:
+  name: echo-device
+  on_boot:
+    - priority: 650
+      then:
+      - light.turn_on:
+          id: led
+          blue: 0%
+          red: 0%
+          green: 50%
+          brightness: 100%
+          effect: Slow Pulse
+
+esp32:
+  board: m5stack-atom
+  framework:
+    type: esp-idf
+    platform_version: 5.4.0
+    version: 4.4.8
+    ##still required for led at minimum
+
+globals:
+  - id: continue_convo
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+i2s_audio:
+  - id: i2s_audio_bus
+    i2s_lrclk_pin: GPIO33
+    i2s_bclk_pin: GPIO19
+
+microphone:
+  - platform: i2s_audio
+    id: echo_microphone
+    i2s_din_pin: GPIO23
+    adc_type: external
+    pdm: true
+
+#adding speaker so voice_assistant fully boots. Fixes devices stuck on "Responding"
+speaker:
+  - platform: i2s_audio
+    id: external_speaker
+    i2s_dout_pin: GPIO21 #21 is invalid pin to that on-board speaker does not function. #Defaul is pin 22
+    dac_type: external
+
+voice_assistant:
+  id: va
+  microphone: echo_microphone
+  speaker: external_speaker
+  use_wake_word: false
+  noise_suppression_level: 2 #not used with microwake detection, but used with stream to HA
+  auto_gain: 31dBFS #still referenced with microwake (default 31dBFS)
+  volume_multiplier: 2.0 #still referenced with microwake (defailt 2.0)
+  on_start:
+    then:
+      - logger.log: "Assistant streaming started."
+      - micro_wake_word.stop:
+  on_listening:
+    - light.turn_on:
+        id: led
+        blue: 100%
+        red: 0%
+        green: 0%
+        effect: "Slow Pulse"
+  on_stt_vad_end:
+    - light.turn_on:
+        id: led
+        blue: 100%
+        red: 0%
+        green: 0%
+        effect: "Fast Pulse"
+    - homeassistant.service:
+        service: script.play_tts_message_v2
+        data_template:
+          message: "{{my_tts}}"   # The dynamic audio URI or file path, in this situation always wake word ack
+          player: "{{my_player}}"  # The dynamic media player (e.g., Sonos)
+        variables:
+          my_tts: !lambda 'return "${ding_sound}";'
+          my_player: !lambda 'return id(response_speaker).state;'        
+  on_tts_start:
+    then:
+      - light.turn_on:
+          id: led
+          blue: 100%
+          red: 0%
+          green: 0%
+          brightness: 100%
+          effect: none  
+      - logger.log: "TTS started."  
+      - homeassistant.service:
+          service: input_text.set_value
+          data:
+            entity_id: input_text.tts_transcript #save the text response to helper variable for delay calc - requires "input_text.tts_transcript" helper entity
+            value: !lambda 'return x;'  
+      - script.execute:
+          id: check_if_question
+          response_text: !lambda 'return x;'
+  on_tts_end:
+    then:
+      - logger.log: "TTS ready, sending audio to HA."
+      - homeassistant.service:
+          service: script.play_tts_message_v2
+          data_template:
+            message: "{{ my_tts }}"
+            player: "{{ my_player }}"  
+          variables:
+            my_tts: !lambda 'return x;'
+            my_player: !lambda 'return id(response_speaker).state;'          
+  on_end:
+    then:
+      - logger.log: "Assistant session ended, waiting for TTS to finish externally."
+      - voice_assistant.stop:
+      - delay: 500ms
+      - wait_until:
+          condition:
+            binary_sensor.is_off: tts_playing
+          timeout: 10s
+      - if:
+          condition:
+            lambda: return !id(continue_convo);
+          then:
+            - micro_wake_word.start:
+            - logger.log: "Restarted wake word detection (conversation ended)."
+          else:
+            - voice_assistant.start:
+            - logger.log: "Continue conversation active; Starting voice_assitant and not starting wake word detection."
+      - script.execute: reset_led
+  on_error:
+    - logger.log: "Starting on_error function"
+  on_client_connected:
+    - logger.log: "Starting on_client_connected"
+    - light.turn_on:
+        id: led
+        blue: 0%
+        red: 0%
+        green: 50%
+        brightness: 100%
+        effect: Slow Pulse
+    - delay: 2s  # Give the api server seconds to settle
+    - micro_wake_word.start:
+    - script.execute: reset_led
+  on_client_disconnected:
+    - logger.log: "Starting on_client_disconnected" 
+
+binary_sensor:
+  - platform: homeassistant
+    id: tts_playing
+    entity_id: ${bool_tts_is_playing}
+  - platform: gpio
+    pin:
+      number: GPIO39
+      inverted: true
+    name: Button
+    disabled_by_default: true
+    entity_category: diagnostic
+    id: echo_button
+    on_multi_click:
+      - timing:
+          - ON for at least 5s
+        then:
+            - logger.log: "Echo button held for 5s. Reseting state"
+            - light.turn_on:
+                id: led
+                blue: 0%
+                red: 90%
+                green: 0%
+                brightness: 100%
+                effect: Very Fast Pulse
+            - voice_assistant.stop:
+            - micro_wake_word.stop: 
+            - homeassistant.service:
+                service: input_boolean.turn_off
+                data:
+                  entity_id: input_boolean.tts_playing
+            - delay: 10s
+            - micro_wake_word.start:
+            - light.turn_on:
+                id: led
+                blue: 0%
+                red: 0%
+                green: 90%
+                brightness: 100%
+                effect: Slow Pulse
+            - delay: 2s
+            - micro_wake_word.start:
+            - script.execute: reset_led
+
+select:
+  - platform: template
+    id: response_speaker
+    name: "Response Speaker"
+    options:
+      - media_player.doorbell_pro_speaker
+      - media_player.office
+      - media_player.record_player
+      - media_player.living_room
+      - media_player.upstairs_bedroom
+      - media_player.gym
+      - media_player.outdoor_kitchen
+      - media_player.kitchen
+      - media_player.master_bathroom
+      - media_player.master_bedroom
+      - media_player.laundry_room
+      - media_player.guest_suite_sonoss
+    initial_option: ${default_speaker}
+    entity_category: config
+    restore_value: true
+    icon: mdi:surround-sound
+    optimistic: true
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: led
+    name: None
+    disabled_by_default: true
+    entity_category: config
+    pin: GPIO27
+    default_transition_length: 0s
+    chipset: SK6812
+    num_leds: 1
+    rgb_order: grb
+    rmt_channel: 0
+    effects:
+      - pulse:
+          name: "Slow Pulse"
+          transition_length: 250ms
+          update_interval: 250ms
+          min_brightness: 50%
+          max_brightness: 100%
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 100ms
+          update_interval: 100ms
+          min_brightness: 50%
+          max_brightness: 100%
+      - pulse:
+          name: "Very Fast Pulse"
+          transition_length: 50ms
+          update_interval: 50ms
+          min_brightness: 50%
+          max_brightness: 100%
+
+script:
+  - id: check_if_question
+    parameters:
+      response_text: string
+    then:
+      - lambda: |-
+          if (response_text.size() > 0 && response_text[response_text.size() - 1] == '?') {
+            id(continue_convo) = true;
+          } else {
+            id(continue_convo) = false;
+          }
+  - id: reset_led
+    then:
+      - light.turn_on:
+          id: led
+          red: 100%
+          green: 89%
+          blue: 71%
+          brightness: 60%
+          effect: none
+
+micro_wake_word:
+  vad:
+    model: github://esphome/micro-wake-word-models/models/v2/vad.json
+    probability_cutoff: 0.30
+  models:
+    - model: ${micro_wake_word_model}
+  on_wake_word_detected:
+    then:
+      - if:
+          condition:
+            binary_sensor.is_off: tts_playing
+          then:
+            - homeassistant.service:
+                service: script.play_tts_message_v2
+                data_template:
+                  message: "{{my_tts}}"   # The dynamic audio URI or file path, in this situation always wake word ack
+                  player: "{{my_player}}"  # The dynamic media player (e.g., Sonos)
+                variables:
+                  my_tts: !lambda 'return "${ding_sound}";'
+                  my_player: !lambda 'return id(response_speaker).state;'
+                  
+            - voice_assistant.start:
+          else:
+            - logger.log: "Wake word ignored: TTS playback active."
