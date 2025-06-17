@@ -3,14 +3,14 @@ sequence:
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ 'openwakeword/ack.mp3' in message }}"
+            value_template: "{{ '/ack.mp3' in message }}"
         sequence:
           - data:
               entity_id: "{{ player }}"
               media_content_type: music
               media_content_id: |
-                {% if 'https://your_domain_external.com' in message %}
-                  {{ message | replace('https://your_domain_external.com','https://hyour_domain_internal:8123') }}
+                {% if 'https://ha.external' in message %}
+                  {{ message | replace('https://ha.external','https://ha.local:8123') }}
                 {% else %}
                   {{ message }}
                 {% endif %}
@@ -35,8 +35,8 @@ sequence:
               entity_id: "{{ player }}"
               media_content_type: music
               media_content_id: |
-                {% if 'https://your_domain_external.com' in message %}
-                  {{ message | replace('https://your_domain_external.com','https://hyour_domain_internal:8123') }}
+                {% if 'https://ha.stonewallfisher.com' in message %}
+                  {{ message | replace('https://ha.external','https://ha.local:8123') }}
                 {% else %}
                   {{ message }}
                 {% endif %}
@@ -67,3 +67,4 @@ mode: queued
 trace:
   stored_traces: 50
 max: 2
+description: ""
