@@ -18,6 +18,7 @@
 | File | Purpose |
 |------|---------|
 | **`atom_echo_firmware.yaml`** | ESPHome config for Atom Echo with MicroWakeWord and continued-conversation logic |
+| **`device_specific_firmware.yaml`** | ESPhome firmware for the device, and it "includes" the full atom_echo_firmware.yaml |
 | **`play_tts_message_v2.yaml`** | HA script that plays TTS/ack audio, toggles `input_boolean.tts_playing`, inserts delays |
 
 ---
