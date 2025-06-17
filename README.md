@@ -1,4 +1,3 @@
-
 # Atom Echo – Continued-Conversation Satellite
 
 > **Disclaimer**
@@ -18,8 +17,9 @@
 | File | Purpose |
 |------|---------|
 | **`atom_echo_firmware.yaml`** | ESPHome config for Atom Echo with MicroWakeWord and continued-conversation logic |
-| **`device_specific_firmware.yaml`** | ESPhome firmware for the device, and it "includes" the full atom_echo_firmware.yaml |
-| **`play_tts_message_v2.yaml`** | HA script that plays TTS/ack audio, toggles `input_boolean.tts_playing`, inserts delays |
+| **`device_specific_firmware.yaml`** | Device-specific ESPHome config, includes the main firmware, sets min ESPHome version, WiFi, encryption, etc. |
+| **`play_tts_message_v2.yaml`** | HA script that plays TTS/ack audio, toggles `input_boolean.tts_playing`, inserts delays based on transcript word count |
+| **`mww_training_w_cuda_requirements.txt`** | Python requirements for MicroWakeWord model training (TensorFlow, PyTorch, etc.) |
 
 ---
 
@@ -28,7 +28,10 @@
 * **Continued Conversation** – Automatically keeps the mic open for follow‑up questions when the response ends with a question mark.  
 * *Attempts* **smart TTS gating** – The helper script turns **`tts_playing` on** before audio playback and **off** after a delay so the microphone ignores the speaker.  
 * **Selectable response speaker** – Choose the output zone via the **Response Speaker** dropdown in the Atom Echo *device* config (`select.response_speaker`).  
-* Single‑LED feedback: idle, listening, thinking, error.
+* Single‑LED feedback: idle, listening, thinking, error, with multiple custom effects (Slow Pulse, Fast Pulse, Very Fast Pulse, etc.).
+* **Device-specific config** – `device_specific_firmware.yaml` sets device name, WiFi, encryption, and requires ESPHome 2025.4.0+.
+* **Transcript management** – Uses `input_text.tts_transcript` to store and clear the last TTS message.
+* **MicroWakeWord model training** – See `mww_training_w_cuda_requirements.txt` for dependencies if you want to train your own wake word model.
 
 For details on MicroWakeWord itself see <https://esphome.io/components/micro_wake_word.html>.
 
@@ -45,22 +48,30 @@ sequenceDiagram
     participant SCR as play_tts_message_v2
     Note over MW,FW: tts_playing = OFF
     MW->>FW: Wake word detected
+    Note over FW: LED = blue (listening)
     FW->>SCR: Play *ding* on selected speaker (turn tts_playing ON)
-    SCR->>SCR: delay 1.5
+    SCR->>SCR: delay 1.5s (fixed)
     SCR-->>FW: Ack finished (turn tts_playing OFF)
     FW->>MW: stop()
     FW->>VA: start()
     VA->>HA: Stream mic ➜ STT ➜ LLM
     HA-->>VA: TTS response
-    VA->>FW: on_tts_start<br/>check "?" ➜ set continue_convo
+    VA->>FW: on_tts_start<br/>set transcript, check "?" ➜ set continue_convo
+    Note over FW: LED = blue (thinking)
     VA->>SCR: Play TTS on speaker (turn tts_playing ON)
-    SCR->>SCR: delay 3
+    SCR->>SCR: delay (computed from transcript word count, min 2s, max 30s)
+    SCR->>HA: Clear transcript
     SCR-->>FW: TTS finished (turn tts_playing OFF)
+    FW->>FW: wait until tts_playing == OFF
     FW->>VA: stop()
     alt continue_convo == true
         FW->>VA: start()  %% stays in conversation
     else continue_convo == false
         FW->>MW: start()  %% back to wake‑word idle
+    end
+    Note over FW: LED = green (idle)
+    alt error
+        FW->>FW: LED = red, log error
     end
 ```
 
@@ -79,7 +90,7 @@ sequenceDiagram
 | State | Meaning | Set by |
 |-------|---------|--------|
 | **ON**  | Audio is currently playing; mic should be ignored | `play_tts_message_v2` **before** `media_player.play_media` |
-| **OFF** | Safe to reopen mic / accept wake word | `play_tts_message_v2` after delay |
+| **OFF** | Safe to reopen mic / accept wake word | `play_tts_message_v2` after computed delay |
 
 This simple helper keeps the Atom from hearing—and reacting to—its own voice.
 
@@ -89,8 +100,10 @@ This simple helper keeps the Atom from hearing—and reacting to—its own voice
 
 `media_player.play_media` is non‑blocking, so we inject a pause:
 
-* **1.5 s** – quick acknowledgement ding  
-* **3 s** – typical TTS sentence  
+* **Ding sound** – 1.5 s fixed delay
+* **TTS** – Delay is now calculated based on the transcript word count:
+  * `computed_delay = clamp(round(words / 170 * 60), 2, 30)`
+  * Where 170 is the words-per-minute rate, and the delay is clamped between 2 and 30 seconds.
 
 ### Why not calculate the exact duration?
 
@@ -100,15 +113,18 @@ This simple helper keeps the Atom from hearing—and reacting to—its own voice
 | **Bit‑rate & file size** | Even with VBR, file size would be close enough, but getting it from disk/URL inside an automation is tricky. |
 | **Character count heuristic** | `on_tts_start` exposes the char count *before* the MP3 exists; the script runs in `on_tts_end`, so passing the value across events is non‑trivial. |
 
-If you devise a reliable method, swap out the fixed delays in the script.
+If you devise a reliable method, swap out the computed delay in the script.
 
 ---
 
 ## Customization Tips
 
 * Host your own *ding* sound and update the script’s `message` template (see HA static file docs: <https://www.home-assistant.io/blog/2016/04/07/static-website/>).  
-* Modify LED colors/effects in the `light:` block.  
-* Add or remove media players in `select.response_speaker.options`.  
+* Modify LED colors/effects in the `light:` block. Several custom effects are available (Slow Pulse, Fast Pulse, Very Fast Pulse, etc.).
+* Add or remove media players in `select.response_speaker.options`.
+* Adjust the minimum ESPHome version in `device_specific_firmware.yaml` if needed.
+* Use or modify `input_text.tts_transcript` for transcript management and delay calculation.
+* For advanced users: train your own MicroWakeWord model using the requirements in `mww_training_w_cuda_requirements.txt`.
 
 ---
 
@@ -116,7 +132,9 @@ If you devise a reliable method, swap out the fixed delays in the script.
 
 * Home Assistant 2025.4 – [Continued Conversation with LLMs](https://www.home-assistant.io/blog/2025/04/02/release-20254/#continued-conversation-with-llms)  
 * ESPHome MicroWakeWord component – <https://esphome.io/components/micro_wake_word.html>
+* ESPHome minimum version required: **2025.4.0** (see `device_specific_firmware.yaml`)
+* MicroWakeWord model training requirements: see `mww_training_w_cuda_requirements.txt`
 
 ---
 
-*README generated 2025-05-12*
+*README updated 2025-06-16*
