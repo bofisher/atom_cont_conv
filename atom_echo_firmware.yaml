@@ -1,13 +1,10 @@
 substitutions:
   bool_tts_is_playing: input_boolean.tts_playing
-  ding_sound: "https://your_domain_internal:8123/local/custom_media/openwakeword/ack.mp3"
-  micro_wake_word_model: hey_jarvis
+  ding_sound: "https://ha.local/local/wake-words/ack.mp3"
+  micro_wake_word_model: "https://ha.local/local/wake-words/hey_stonewallv18.2.json"
 
-# Enable Home Assistant API
-  
-##########
-esphome:
-  name: echo-device
+
+esphome:  
   on_boot:
     - priority: 650
       then:
@@ -23,8 +20,8 @@ esp32:
   board: m5stack-atom
   framework:
     type: esp-idf
-    platform_version: 5.4.0
-    version: 4.4.8
+    #platform_version: 5.4.0
+    #version: 4.4.8
     ##still required for led at minimum
 
 globals:
@@ -45,17 +42,16 @@ microphone:
     adc_type: external
     pdm: true
 
-#adding speaker so voice_assistant fully boots. Fixes devices stuck on "Responding"
-speaker:
-  - platform: i2s_audio
-    id: external_speaker
-    i2s_dout_pin: GPIO21 #21 is invalid pin to that on-board speaker does not function. #Defaul is pin 22
-    dac_type: external
+# speaker:
+#   - platform: i2s_audio
+#     id: external_speaker
+#     i2s_dout_pin: GPIO21
+#     dac_type: external
 
 voice_assistant:
   id: va
   microphone: echo_microphone
-  speaker: external_speaker
+  #speaker: external_speaker #removing as I dont want the atom echo speaker to be used
   use_wake_word: false
   noise_suppression_level: 2 #not used with microwake detection, but used with stream to HA
   auto_gain: 31dBFS #still referenced with microwake (default 31dBFS)
@@ -79,7 +75,7 @@ voice_assistant:
         green: 0%
         effect: "Fast Pulse"
     - homeassistant.service:
-        service: script.play_tts_message_v2
+        service: script.play_tts_message_media_player_v2
         data_template:
           message: "{{my_tts}}"   # The dynamic audio URI or file path, in this situation always wake word ack
           player: "{{my_player}}"  # The dynamic media player (e.g., Sonos)
@@ -99,7 +95,7 @@ voice_assistant:
       - homeassistant.service:
           service: input_text.set_value
           data:
-            entity_id: input_text.tts_transcript #save the text response to helper variable for delay calc - requires "input_text.tts_transcript" helper entity
+            entity_id: input_text.tts_transcript
             value: !lambda 'return x;'  
       - script.execute:
           id: check_if_question
@@ -108,7 +104,7 @@ voice_assistant:
     then:
       - logger.log: "TTS ready, sending audio to HA."
       - homeassistant.service:
-          service: script.play_tts_message_v2
+          service: script.play_tts_message_media_player_v2
           data_template:
             message: "{{ my_tts }}"
             player: "{{ my_player }}"  
@@ -136,6 +132,13 @@ voice_assistant:
       - script.execute: reset_led
   on_error:
     - logger.log: "Starting on_error function"
+    - light.turn_on:
+        id: led
+        blue: 0%
+        red: 100%
+        green: 0%
+        brightness: 100%
+        effect: none
   on_client_connected:
     - logger.log: "Starting on_client_connected"
     - light.turn_on:
@@ -150,6 +153,7 @@ voice_assistant:
     - script.execute: reset_led
   on_client_disconnected:
     - logger.log: "Starting on_client_disconnected" 
+    - script.execute: reset_led
 
 binary_sensor:
   - platform: homeassistant
@@ -167,7 +171,7 @@ binary_sensor:
       - timing:
           - ON for at least 5s
         then:
-            - logger.log: "Echo button held for 5s. Reseting state"
+            - logger.log: "Echo button held for 5s. Soft reset of device"
             - light.turn_on:
                 id: led
                 blue: 0%
@@ -228,7 +232,8 @@ light:
     chipset: SK6812
     num_leds: 1
     rgb_order: grb
-    rmt_channel: 0
+    #rmt_channel: 0 ## removed to use latest version of esp-idf
+    #rmt_symbols: 96 ## added to use latest version of esp-idf #doesnt seem to be needed
     effects:
       - pulse:
           name: "Slow Pulse"
@@ -264,7 +269,7 @@ script:
     then:
       - light.turn_on:
           id: led
-          red: 100%
+          red: 90%
           green: 89%
           blue: 71%
           brightness: 60%
@@ -273,7 +278,7 @@ script:
 micro_wake_word:
   vad:
     model: github://esphome/micro-wake-word-models/models/v2/vad.json
-    probability_cutoff: 0.30
+    probability_cutoff: 0.35 #default is .5
   models:
     - model: ${micro_wake_word_model}
   on_wake_word_detected:
@@ -283,7 +288,7 @@ micro_wake_word:
             binary_sensor.is_off: tts_playing
           then:
             - homeassistant.service:
-                service: script.play_tts_message_v2
+                service: script.play_tts_message_media_player_v2
                 data_template:
                   message: "{{my_tts}}"   # The dynamic audio URI or file path, in this situation always wake word ack
                   player: "{{my_player}}"  # The dynamic media player (e.g., Sonos)
