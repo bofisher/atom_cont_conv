@@ -1,0 +1,31 @@
+substitutions:
+  name: office-echo
+  friendly_name: Office-Echo
+  default_speaker: media_player.office
+  encrypt_key: 
+  ota_pass:
+  wifi_ssid: !secret wifi_ssid
+  wifi_pass: !secret wifi_password
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.4.0
+
+# Enable logging
+logger:
+  level: WARN
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: ${encrypt_key}
+ota:
+  - platform: esphome
+    password: ${ota_pass}
+wifi:
+  ssid: ${wifi_ssid}
+  password: ${wifi_pass}
+
+packages:
+  default: !include atom_echo_firmware.yaml
