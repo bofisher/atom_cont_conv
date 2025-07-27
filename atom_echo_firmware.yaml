@@ -1,8 +1,7 @@
+# Atom Echo firmware for ESPHome. See README for details.
 substitutions:
-  bool_tts_is_playing: input_boolean.tts_playing
-  ding_sound: "https://ha.local/local/wake-words/ack.mp3"
-  micro_wake_word_model: "https://ha.local/local/wake-words/hey_stonewallv18.2.json"
-
+  ding_sound: "https://example.com/ack.mp3"
+  micro_wake_word_model: "https://example.com/model.json"
 
 esphome:  
   on_boot:
@@ -14,15 +13,12 @@ esphome:
           red: 0%
           green: 50%
           brightness: 100%
-          effect: Slow Pulse
 
 esp32:
   board: m5stack-atom
+  cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    #platform_version: 5.4.0
-    #version: 4.4.8
-    ##still required for led at minimum
 
 globals:
   - id: continue_convo
@@ -41,26 +37,52 @@ microphone:
     i2s_din_pin: GPIO23
     adc_type: external
     pdm: true
+    sample_rate: 16000
+    correct_dc_offset: true
 
-# speaker:
-#   - platform: i2s_audio
-#     id: external_speaker
-#     i2s_dout_pin: GPIO21
-#     dac_type: external
+speaker:
+  - platform: i2s_audio
+    id: echo_speaker
+    i2s_dout_pin: GPIO21
+    dac_type: external
+    bits_per_sample: 16bit
+    sample_rate: 16000
+    channel: mono #mono will have bad performance, however, we are not using the on device speaker
+    buffer_duration: 60ms
+
+media_player:
+  - platform: speaker
+    name: None
+    id: echo_media_player
+    announcement_pipeline:
+      speaker: echo_speaker
+      format: WAV
+    codec_support_enabled: false
+    buffer_size: 4000 #4000 is minimum, and we are not using the on device speaker
 
 voice_assistant:
   id: va
-  microphone: echo_microphone
-  #speaker: external_speaker #removing as I dont want the atom echo speaker to be used
+  microphone:
+    microphone: echo_microphone
+    channels: 0
+    gain_factor: ${mic_gain} # Memory sensitive; recommended range 4-10.
+  media_player: echo_media_player
   use_wake_word: false
-  noise_suppression_level: 2 #not used with microwake detection, but used with stream to HA
-  auto_gain: 31dBFS #still referenced with microwake (default 31dBFS)
-  volume_multiplier: 2.0 #still referenced with microwake (defailt 2.0)
+  noise_suppression_level: 3
+  auto_gain: 31dBFS
+  volume_multiplier: 2.0
   on_start:
-    then:
-      - logger.log: "Assistant streaming started."
-      - micro_wake_word.stop:
+    - micro_wake_word.stop:
+    - light.turn_on:
+        id: led
+        blue: 100%
+        red: 0%
+        green: 0%
+        effect: None
   on_listening:
+    - wait_until:
+      - binary_sensor.is_off: tts_playing
+    - microphone.unmute:
     - light.turn_on:
         id: led
         blue: 100%
@@ -77,149 +99,72 @@ voice_assistant:
     - homeassistant.service:
         service: script.play_tts_message_media_player_v2
         data_template:
-          message: "{{my_tts}}"   # The dynamic audio URI or file path, in this situation always wake word ack
-          player: "{{my_player}}"  # The dynamic media player (e.g., Sonos)
+          message: "{{my_tts}}"
+          player: "{{my_player}}"
         variables:
           my_tts: !lambda 'return "${ding_sound}";'
-          my_player: !lambda 'return id(response_speaker).state;'        
+          my_player: !lambda 'return "${default_speaker}";'
   on_tts_start:
     then:
       - light.turn_on:
           id: led
           blue: 100%
           red: 0%
-          green: 0%
-          brightness: 100%
-          effect: none  
-      - logger.log: "TTS started."  
+          green: 100%
+          brightness: 0%
+          effect: "Fast Pulse"  
       - homeassistant.service:
           service: input_text.set_value
           data:
             entity_id: input_text.tts_transcript
-            value: !lambda 'return x;'  
+            value: !lambda 'return x;'
       - script.execute:
           id: check_if_question
           response_text: !lambda 'return x;'
   on_tts_end:
     then:
-      - logger.log: "TTS ready, sending audio to HA."
+      - microphone.mute:
       - homeassistant.service:
           service: script.play_tts_message_media_player_v2
           data_template:
             message: "{{ my_tts }}"
-            player: "{{ my_player }}"  
+            player: "{{ my_player }}"
           variables:
             my_tts: !lambda 'return x;'
-            my_player: !lambda 'return id(response_speaker).state;'          
+            my_player: !lambda 'return "${default_speaker}";'
   on_end:
     then:
-      - logger.log: "Assistant session ended, waiting for TTS to finish externally."
-      - voice_assistant.stop:
-      - delay: 500ms
+      - delay: 250ms
       - wait_until:
-          condition:
-            binary_sensor.is_off: tts_playing
-          timeout: 10s
+         - binary_sensor.is_off: tts_playing
       - if:
           condition:
             lambda: return !id(continue_convo);
           then:
+            - voice_assistant.stop:
+            - wait_until:
+              - binary_sensor.is_off: tts_playing
             - micro_wake_word.start:
-            - logger.log: "Restarted wake word detection (conversation ended)."
+            - script.execute: reset_led
           else:
+            - wait_until:
+                - binary_sensor.is_off: tts_playing
             - voice_assistant.start:
-            - logger.log: "Continue conversation active; Starting voice_assitant and not starting wake word detection."
-      - script.execute: reset_led
-  on_error:
-    - logger.log: "Starting on_error function"
-    - light.turn_on:
-        id: led
-        blue: 0%
-        red: 100%
-        green: 0%
-        brightness: 100%
-        effect: none
+      - microphone.unmute:
   on_client_connected:
-    - logger.log: "Starting on_client_connected"
-    - light.turn_on:
-        id: led
-        blue: 0%
-        red: 0%
-        green: 50%
-        brightness: 100%
-        effect: Slow Pulse
-    - delay: 2s  # Give the api server seconds to settle
+    - script.execute: reset_led
+    - delay: 2s
     - micro_wake_word.start:
-    - script.execute: reset_led
-  on_client_disconnected:
-    - logger.log: "Starting on_client_disconnected" 
-    - script.execute: reset_led
 
 binary_sensor:
   - platform: homeassistant
     id: tts_playing
-    entity_id: ${bool_tts_is_playing}
-  - platform: gpio
-    pin:
-      number: GPIO39
-      inverted: true
-    name: Button
-    disabled_by_default: true
-    entity_category: diagnostic
-    id: echo_button
-    on_multi_click:
-      - timing:
-          - ON for at least 5s
-        then:
-            - logger.log: "Echo button held for 5s. Soft reset of device"
-            - light.turn_on:
-                id: led
-                blue: 0%
-                red: 90%
-                green: 0%
-                brightness: 100%
-                effect: Very Fast Pulse
-            - voice_assistant.stop:
-            - micro_wake_word.stop: 
-            - homeassistant.service:
-                service: input_boolean.turn_off
-                data:
-                  entity_id: input_boolean.tts_playing
-            - delay: 10s
-            - micro_wake_word.start:
-            - light.turn_on:
-                id: led
-                blue: 0%
-                red: 0%
-                green: 90%
-                brightness: 100%
-                effect: Slow Pulse
-            - delay: 2s
-            - micro_wake_word.start:
-            - script.execute: reset_led
+    entity_id: input_boolean.tts_playing
 
-select:
-  - platform: template
-    id: response_speaker
-    name: "Response Speaker"
-    options:
-      - media_player.doorbell_pro_speaker
-      - media_player.office
-      - media_player.record_player
-      - media_player.living_room
-      - media_player.upstairs_bedroom
-      - media_player.gym
-      - media_player.outdoor_kitchen
-      - media_player.kitchen
-      - media_player.master_bathroom
-      - media_player.master_bedroom
-      - media_player.laundry_room
-      - media_player.guest_suite_sonoss
-    initial_option: ${default_speaker}
-    entity_category: config
-    restore_value: true
-    icon: mdi:surround-sound
-    optimistic: true
+text_sensor:
+  - platform: homeassistant
+    id: assist_devices_active_list
+    entity_id: sensor.assist_devices_active_list
 
 light:
   - platform: esp32_rmt_led_strip
@@ -232,8 +177,6 @@ light:
     chipset: SK6812
     num_leds: 1
     rgb_order: grb
-    #rmt_channel: 0 ## removed to use latest version of esp-idf
-    #rmt_symbols: 96 ## added to use latest version of esp-idf #doesnt seem to be needed
     effects:
       - pulse:
           name: "Slow Pulse"
@@ -245,12 +188,6 @@ light:
           name: "Fast Pulse"
           transition_length: 100ms
           update_interval: 100ms
-          min_brightness: 50%
-          max_brightness: 100%
-      - pulse:
-          name: "Very Fast Pulse"
-          transition_length: 50ms
-          update_interval: 50ms
           min_brightness: 50%
           max_brightness: 100%
 
@@ -278,24 +215,24 @@ script:
 micro_wake_word:
   vad:
     model: github://esphome/micro-wake-word-models/models/v2/vad.json
-    probability_cutoff: 0.35 #default is .5
+    probability_cutoff: 0.45
   models:
     - model: ${micro_wake_word_model}
   on_wake_word_detected:
     then:
+      - delay: 250ms
       - if:
           condition:
-            binary_sensor.is_off: tts_playing
+            - binary_sensor.is_off: tts_playing
           then:
             - homeassistant.service:
                 service: script.play_tts_message_media_player_v2
                 data_template:
-                  message: "{{my_tts}}"   # The dynamic audio URI or file path, in this situation always wake word ack
-                  player: "{{my_player}}"  # The dynamic media player (e.g., Sonos)
+                  message: "{{my_tts}}"
+                  player: "{{my_player}}"
                 variables:
                   my_tts: !lambda 'return "${ding_sound}";'
-                  my_player: !lambda 'return id(response_speaker).state;'
-                  
+                  my_player: !lambda 'return "${default_speaker}";'
             - voice_assistant.start:
           else:
             - logger.log: "Wake word ignored: TTS playback active."

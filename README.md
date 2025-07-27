@@ -1,3 +1,4 @@
+
 # Atom Echo – Continued-Conversation Satellite
 
 > **Disclaimer**
@@ -18,26 +19,34 @@
 |------|---------|
 | **`atom_echo_firmware.yaml`** | ESPHome config for Atom Echo with MicroWakeWord and continued-conversation logic |
 | **`device_specific_firmware.yaml`** | Device-specific ESPHome config, includes the main firmware, sets min ESPHome version, WiFi, encryption, etc. |
-| **`play_tts_message_v2.yaml`** | HA script that plays TTS/ack audio, toggles `input_boolean.tts_playing`, inserts delays based on transcript word count |
+| **`play_tts_message_v2.yaml`** | Home Assistant script that plays TTS/ack audio, toggles `input_boolean.tts_playing`, inserts delays based on transcript word count |
 | **`mww_training_w_cuda_requirements.txt`** | Python requirements for MicroWakeWord model training (TensorFlow, PyTorch, etc.) |
+
+---
+
+## Required Home Assistant Entities
+
+| Entity | Type | Purpose |
+|--------|------|--------|
+| `input_boolean.tts_playing` | Boolean | Indicates TTS playback is active; used to gate microphone |
+| `input_text.tts_transcript` | Text | Stores last TTS message for delay calculation and transcript management |
 
 ---
 
 ## Feature Highlights
 
 * **Continued Conversation** – Automatically keeps the mic open for follow‑up questions when the response ends with a question mark.  
-* *Attempts* **smart TTS gating** – The helper script turns **`tts_playing` on** before audio playback and **off** after a delay so the microphone ignores the speaker.  
+* **Smart TTS gating** – The helper script turns **`tts_playing` on** before audio playback and **off** after a delay so the microphone ignores the speaker.  
 * **Selectable response speaker** – Choose the output zone via the **Response Speaker** dropdown in the Atom Echo *device* config (`select.response_speaker`).  
 * Single‑LED feedback: idle, listening, thinking, error, with multiple custom effects (Slow Pulse, Fast Pulse, Very Fast Pulse, etc.).
 * **Device-specific config** – `device_specific_firmware.yaml` sets device name, WiFi, encryption, and requires ESPHome 2025.4.0+.
 * **Transcript management** – Uses `input_text.tts_transcript` to store and clear the last TTS message.
 * **MicroWakeWord model training** – See `mww_training_w_cuda_requirements.txt` for dependencies if you want to train your own wake word model.
-
-For details on MicroWakeWord itself see <https://esphome.io/components/micro_wake_word.html>.
+* **Ask Question Automation** – Use Home Assistant’s `assist_satellite.ask_question` service to trigger a question, wait for a spoken response, and act on the answer.
 
 ---
 
-## Logic Flow
+## Workflow: Voice Assistant, TTS, and Ask Question
 
 ```mermaid
 sequenceDiagram
@@ -46,6 +55,8 @@ sequenceDiagram
     participant VA as voice_assistant
     participant HA as Home Assistant
     participant SCR as play_tts_message_v2
+    participant User
+    participant Automation
     Note over MW,FW: tts_playing = OFF
     MW->>FW: Wake word detected
     Note over FW: LED = blue (listening)
@@ -73,58 +84,58 @@ sequenceDiagram
     alt error
         FW->>FW: LED = red, log error
     end
+    alt ask_question triggered
+        Automation->>VA: assist_satellite.ask_question (e.g., "Should I turn on the light?")
+        User->>VA: Answers yes/no
+        VA->>Automation: Returns answer, automation acts accordingly
+    end
 ```
 
-### Key Decision Points
+---
+
+## Key Decision Points
 
 | Stage | Condition / Check | Action |
 |-------|------------------|--------|
 | **on_wake_word_detected** | `tts_playing` must be **OFF** | Prevents re‑trigger during playback |
 | **on_tts_start** | Response text ends with “?” | Sets global `continue_convo` |
 | **on_end** | Wait until `tts_playing` is **OFF** | Then either restart **voice_assistant** (follow‑up) or **micro_wake_word** (idle) |
+| **ask_question** | Automation triggers question | Waits for user response, acts on answer |
 
 ---
 
-## The `tts_playing` Boolean
+## TTS Script Logic and Delay Calculation
 
-| State | Meaning | Set by |
-|-------|---------|--------|
-| **ON**  | Audio is currently playing; mic should be ignored | `play_tts_message_v2` **before** `media_player.play_media` |
-| **OFF** | Safe to reopen mic / accept wake word | `play_tts_message_v2` after computed delay |
+The script `play_tts_message_media_player_v2` manages TTS playback and microphone gating:
 
-This simple helper keeps the Atom from hearing—and reacting to—its own voice.
+1. Sets `tts_playing` ON before playback.
+2. Plays TTS or ding sound on the selected media player.
+3. Calculates delay based on transcript word count:
+   - Counts words in `input_text.tts_transcript`.
+   - Uses WPM (words per minute) to estimate duration:
+     - `computed_delay = clamp(round(words / WPM * 60), min, max)`
+     - WPM and clamp values are configurable (e.g., WPM=170, min=2s, max=30s).
+   - For short responses, WPM may be increased for more accurate timing.
+4. Clears transcript after playback.
+5. Sets `tts_playing` OFF after the delay.
 
----
-
-## Script Delay Rationale
-
-`media_player.play_media` is non‑blocking, so we inject a pause:
-
-* **Ding sound** – 1.5 s fixed delay
-* **TTS** – Delay is now calculated based on the transcript word count:
-  * `computed_delay = clamp(round(words / 170 * 60), 2, 30)`
-  * Where 170 is the words-per-minute rate, and the delay is clamped between 2 and 30 seconds.
-
-### Why not calculate the exact duration?
-
-| Idea | Hurdle |
-|------|--------|
-| **Content‑Length (HTTP header) → duration** | Invoking a separate HTTP request inside the automation is messy. |
-| **Bit‑rate & file size** | Even with VBR, file size would be close enough, but getting it from disk/URL inside an automation is tricky. |
-| **Character count heuristic** | `on_tts_start` exposes the char count *before* the MP3 exists; the script runs in `on_tts_end`, so passing the value across events is non‑trivial. |
-
-If you devise a reliable method, swap out the computed delay in the script.
+This ensures the Atom Echo does not react to its own TTS playback and resumes listening only when safe.
 
 ---
 
-## Customization Tips
+## Ask Question Automation: How It Works
 
-* Host your own *ding* sound and update the script’s `message` template (see HA static file docs: <https://www.home-assistant.io/blog/2016/04/07/static-website/>).  
-* Modify LED colors/effects in the `light:` block. Several custom effects are available (Slow Pulse, Fast Pulse, Very Fast Pulse, etc.).
-* Add or remove media players in `select.response_speaker.options`.
-* Adjust the minimum ESPHome version in `device_specific_firmware.yaml` if needed.
-* Use or modify `input_text.tts_transcript` for transcript management and delay calculation.
-* For advanced users: train your own MicroWakeWord model using the requirements in `mww_training_w_cuda_requirements.txt`.
+- The `assist_satellite.ask_question` service lets automations/scripts send a question to a voice assistant device (satellite).
+- The device asks the question (e.g., "Should I turn on the light?") and waits for the user’s spoken response.
+- The automation parses the answer (yes/no or custom) and triggers actions based on the reply.
+- This enables interactive, voice-driven automations (e.g., confirming actions, making choices).
+- Example: After a command, the system can ask for confirmation before toggling a switch.
+
+---
+
+## Extending ask_question for Multi-Step Dialogs
+
+You can chain multiple `assist_satellite.ask_question` calls in your automations to create more complex, multi-step voice dialogs. For example, after confirming an action, you can immediately ask a follow-up question and branch logic based on each response. This enables interactive, guided workflows for advanced use cases.
 
 ---
 
@@ -137,4 +148,4 @@ If you devise a reliable method, swap out the computed delay in the script.
 
 ---
 
-*README updated 2025-06-16*
+*README preview generated 2025-07-27*
