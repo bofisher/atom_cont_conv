@@ -58,7 +58,7 @@ sequence:
               value: ""
             target:
               entity_id: input_text.tts_transcript
-            enabled: false
+            enabled: true
           - delay:
               seconds: "{{ computed_delay }}"
           - target:
