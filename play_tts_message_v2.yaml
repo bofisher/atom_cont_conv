@@ -9,8 +9,8 @@ sequence:
               entity_id: "{{ player }}"
               media_content_type: music
               media_content_id: |
-                {% if 'https://ha.external' in message %}
-                  {{ message | replace('https://ha.external','https://ha.local:8123') }}
+                {% if 'https://external.example.com' in message %}
+                  {{ message | replace('https://external.example.com','https://internal.example.com:8123') }}
                 {% else %}
                   {{ message }}
                 {% endif %}
@@ -35,8 +35,8 @@ sequence:
               entity_id: "{{ player }}"
               media_content_type: music
               media_content_id: |
-                {% if 'https://ha.stonewallfisher.com' in message %}
-                  {{ message | replace('https://ha.external','https://ha.local:8123') }}
+                {% if 'https://external.example.com' in message %}
+                  {{ message | replace('https://external.example.com','https://internal.example.com:8123') }}
                 {% else %}
                   {{ message }}
                 {% endif %}
@@ -48,8 +48,9 @@ sequence:
               tts_wpm: 170
               computed_delay: >
                 {% set words = (states('input_text.tts_transcript') |
-                string).split() | length %} {% set secs  = (words / tts_wpm *
-                60) | round(0, 'ceil') %} {{ ([secs, 2, 30] | sort)[1] | int }}
+                string).split() | length %} {% set tts_wpm = 240 if words <= 10
+                else 200 %} {% set secs = (words / tts_wpm * 60) | round(0,
+                'ceil') %} {{ ([secs, 1, 15] | sort)[1] | int }}
           - action: input_text.set_value
             continue_on_error: true
             metadata: {}
@@ -57,6 +58,7 @@ sequence:
               value: ""
             target:
               entity_id: input_text.tts_transcript
+            enabled: false
           - delay:
               seconds: "{{ computed_delay }}"
           - target:
@@ -65,6 +67,6 @@ sequence:
             data: {}
 mode: queued
 trace:
-  stored_traces: 50
+  stored_traces: 10
 max: 2
-description: ""
+
