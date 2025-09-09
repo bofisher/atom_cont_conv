@@ -67,6 +67,6 @@ sequence:
             data: {}
 mode: queued
 trace:
-  stored_traces: 10  git rebase -i 4f728ab4a395af42f3542c2e8c366485ca8657a3^
+  stored_traces: 10
 max: 2
 
