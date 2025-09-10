@@ -50,7 +50,6 @@
 
 * **Continued Conversation** – Automatically keeps the mic open for follow‑up questions when the response ends with a question mark.  
 * **Smart TTS gating** – The helper script turns **`tts_playing` on** before audio playback and **off** after a delay so the microphone ignores the speaker.  
-* **Selectable response speaker** – Choose the output zone via the **Response Speaker** dropdown in the Atom Echo *device* config (`select.response_speaker`).  
 * Single‑LED feedback: idle, listening, thinking, error, with multiple custom effects (Slow Pulse, Fast Pulse, Very Fast Pulse, etc.).
 * **Device-specific config** – `device_specific_firmware.yaml` sets device name, WiFi, encryption, and requires ESPHome 2025.8.3+.
 * **Transcript management** – Uses `input_text.tts_transcript` to store and clear the last TTS message.
