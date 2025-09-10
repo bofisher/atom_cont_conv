@@ -12,7 +12,6 @@ substitutions:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
-  min_version: 2025.5.0
 
 # Enable logging
 logger:
