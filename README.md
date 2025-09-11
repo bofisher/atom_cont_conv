@@ -5,7 +5,7 @@
 > 
 > **The custom voice_assistant component in this repository is no longer needed!**
 > 
-> ESPHome 2025.8.3 has fixed the voice satellite entity state bug where the state would get stuck in "Idle" instead of properly transitioning through idle → processing → responding → idle. The `esphome/custom_components/voice_assistant/` folder in this repository is now **deprecated** and should not be used.
+> ESPHome 2025.8.3 has fixed the voice satellite entity state bug where the state would get stuck in "Responding" instead of properly transitioning through idle → processing → responding → idle. The `esphome/custom_components/voice_assistant/` folder in this repository is now **deprecated** and should not be used.
 > 
 > **For new installations:** Simply use the standard ESPHome voice_assistant component with ESPHome 2025.8.3 or later.
 > 
