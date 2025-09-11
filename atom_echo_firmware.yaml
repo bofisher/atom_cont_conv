@@ -219,21 +219,34 @@ micro_wake_word:
     probability_cutoff: 0.45
   models:
     - model: ${micro_wake_word_model}
-  on_wake_word_detected:
-    then:
-      - delay: 250ms
-      - if:
-          condition:
-            - binary_sensor.is_off: tts_playing
-          then:
-            - homeassistant.service:
-                service: script.play_tts_message_media_player_v2
-                data_template:
-                  message: "{{my_tts}}"
-                  player: "{{my_player}}"
-                variables:
-                  my_tts: !lambda 'return "${ding_sound}";'
-                  my_player: !lambda 'return "${default_speaker}";'
-            - voice_assistant.start:
-          else:
-            - logger.log: "Wake word ignored: TTS playback active."
+on_wake_word_detected:
+  then:
+    - delay: 250ms
+    - if:
+        condition:
+          - binary_sensor.is_off: tts_playing
+        then:
+          - logger.log: "Starting voice_assistant to claim winning spot"
+          - voice_assistant.start:
+          - wait_until:
+              condition:
+                lambda: return id(assist_devices_active_list).state != "idle";
+              timeout: 2s
+          - if:
+              condition:
+                - lambda: return (id(assist_devices_active_list).state).find("${name}") == 0;
+              then:
+                - homeassistant.service:
+                    #first ding after wake word
+                    service: script.play_tts_message_media_player_v2
+                    data_template:
+                      message: "{{my_tts}}"
+                      player: "{{my_player}}"
+                    variables:
+                      my_tts: !lambda 'return "${ding_sound}";'
+                      my_player: !lambda 'return "${default_speaker}";'
+              else:
+                - logger.log: "Wake word ignored and voice_assitant stopping: Another device is already active"
+                - voice_assistant.stop:
+        else:
+          - logger.log: "Wake word ignored: TTS playback active."
