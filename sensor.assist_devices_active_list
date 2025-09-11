@@ -1,0 +1,7 @@
+{{ [
+  'office-echo' if states('assist_satellite.office_echo_assist_satellite') | lower in ['responding', 'processing', 'listening'] else '',
+  'master-bath-echo' if states('assist_satellite.master_bathroom_echo_assist_satellite') | lower in ['responding', 'processing', 'listening'] else '',
+  'kitchen-echo' if states('assist_satellite.kitchen_echo_assist_satellite') | lower in ['responding', 'processing', 'listening'] else '',
+  'master-bed-echo' if states('assist_satellite.master_bedroom_echo_assist_satellite') | lower in ['responding', 'processing', 'listening'] else '',
+  'living-room-echo' if states('assist_satellite.living_room_echo_assist_satellite') | lower in ['responding', 'processing', 'listening'] else ''
+] | select('string') | reject('equalto', '') | list | join(', ') or 'idle'  }}
