@@ -33,6 +33,7 @@
 | **`device_specific_firmware.yaml`** | Device-specific ESPHome config, includes the main firmware, sets min ESPHome version, WiFi, encryption, etc. |
 | **`play_tts_message_v2.yaml`** | Home Assistant script that plays TTS/ack audio, toggles `input_boolean.tts_playing`, inserts delays based on transcript word count |
 | **`mww_training_w_cuda_requirements.txt`** | Python requirements for MicroWakeWord model training (TensorFlow, PyTorch, etc.) |
+| **`sensor.assist_devices_active_list`** | Example template helper that shows list of satellites currently in use. |
 | **`esphome/custom_components/`** | **⚠️ DEPRECATED** - Custom voice_assistant component (no longer needed as of ESPHome 2025.8.3) |
 
 ---
@@ -43,6 +44,7 @@
 |--------|------|--------|
 | `input_boolean.tts_playing` | Boolean | Indicates TTS playback is active; used to gate microphone |
 | `input_text.tts_transcript` | Text | Stores last TTS message for delay calculation and transcript management |
+| `sensor.assist_devices_active_list` | Text | Comma separated list of assist satellites currently in use. Template helper. |
 
 ---
 
