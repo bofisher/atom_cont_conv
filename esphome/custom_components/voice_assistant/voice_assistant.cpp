@@ -35,6 +35,31 @@ void VoiceAssistant::setup() {
       temp_ring_buffer->write((void *) data.data(), data.size());
     }
   });
+
+// User Fix #1: Commenting out media player callback setup to eliminate callback conflicts
+// that cause state machine issues
+/*
+#ifdef USE_MEDIA_PLAYER
+  if (this->media_player_ != nullptr) {
+    this->media_player_->add_on_state_callback([this]() {
+      switch (this->media_player_->state) {
+        case media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING:
+          if (this->media_player_response_state_ == MediaPlayerResponseState::URL_SENT) {
+            // State changed to announcing after receiving the url
+            this->media_player_response_state_ = MediaPlayerResponseState::PLAYING;
+          }
+          break;
+        default:
+          if (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING) {
+            // No longer announcing the TTS response
+            this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
+          }
+          break;
+      }
+    });
+  }
+#endif
+*/
 }
 
 float VoiceAssistant::get_setup_priority() const { return setup_priority::AFTER_CONNECTION; }
@@ -85,7 +110,7 @@ bool VoiceAssistant::start_udp_socket_() {
 bool VoiceAssistant::allocate_buffers_() {
 #ifdef USE_SPEAKER
   if ((this->speaker_ != nullptr) && (this->speaker_buffer_ == nullptr)) {
-    ExternalRAMAllocator<uint8_t> speaker_allocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
+    RAMAllocator<uint8_t> speaker_allocator;
     this->speaker_buffer_ = speaker_allocator.allocate(SPEAKER_BUFFER_SIZE);
     if (this->speaker_buffer_ == nullptr) {
       ESP_LOGW(TAG, "Could not allocate speaker buffer");
@@ -103,7 +128,7 @@ bool VoiceAssistant::allocate_buffers_() {
   }
 
   if (this->send_buffer_ == nullptr) {
-    ExternalRAMAllocator<uint8_t> send_allocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
+    RAMAllocator<uint8_t> send_allocator;
     this->send_buffer_ = send_allocator.allocate(SEND_BUFFER_SIZE);
     if (send_buffer_ == nullptr) {
       ESP_LOGW(TAG, "Could not allocate send buffer");
@@ -136,7 +161,7 @@ void VoiceAssistant::clear_buffers_() {
 
 void VoiceAssistant::deallocate_buffers_() {
   if (this->send_buffer_ != nullptr) {
-    ExternalRAMAllocator<uint8_t> send_deallocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
+    RAMAllocator<uint8_t> send_deallocator;
     send_deallocator.deallocate(this->send_buffer_, SEND_BUFFER_SIZE);
     this->send_buffer_ = nullptr;
   }
@@ -147,7 +172,7 @@ void VoiceAssistant::deallocate_buffers_() {
 
 #ifdef USE_SPEAKER
   if ((this->speaker_ != nullptr) && (this->speaker_buffer_ != nullptr)) {
-    ExternalRAMAllocator<uint8_t> speaker_deallocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
+    RAMAllocator<uint8_t> speaker_deallocator;
     speaker_deallocator.deallocate(this->speaker_buffer_, SPEAKER_BUFFER_SIZE);
     this->speaker_buffer_ = nullptr;
   }
@@ -217,13 +242,21 @@ void VoiceAssistant::loop() {
 
       api::VoiceAssistantRequest msg;
       msg.start = true;
-      msg.conversation_id = this->conversation_id_;
+      msg.set_conversation_id(StringRef(this->conversation_id_));
       msg.flags = flags;
       msg.audio_settings = audio_settings;
-      msg.wake_word_phrase = this->wake_word_;
+      msg.set_wake_word_phrase(StringRef(this->wake_word_));
       this->wake_word_ = "";
 
-      if (this->api_client_ == nullptr || !this->api_client_->send_message(msg)) {
+      // Reset media player state tracking
+#ifdef USE_MEDIA_PLAYER
+      if (this->media_player_ != nullptr) {
+        this->media_player_response_state_ = MediaPlayerResponseState::IDLE;
+      }
+#endif
+
+      if (this->api_client_ == nullptr ||
+          !this->api_client_->send_message(msg, api::VoiceAssistantRequest::MESSAGE_TYPE)) {
         ESP_LOGW(TAG, "Could not request start");
         this->error_trigger_->trigger("not-connected", "Could not request start");
         this->continuous_ = false;
@@ -244,8 +277,8 @@ void VoiceAssistant::loop() {
         size_t read_bytes = this->ring_buffer_->read((void *) this->send_buffer_, SEND_BUFFER_SIZE, 0);
         if (this->audio_mode_ == AUDIO_MODE_API) {
           api::VoiceAssistantAudio msg;
-          msg.data.assign((char *) this->send_buffer_, read_bytes);
-          this->api_client_->send_message(msg);
+          msg.set_data(this->send_buffer_, read_bytes);
+          this->api_client_->send_message(msg, api::VoiceAssistantAudio::MESSAGE_TYPE);
         } else {
           if (!this->udp_socket_running_) {
             if (!this->start_udp_socket_()) {
@@ -278,7 +311,6 @@ void VoiceAssistant::loop() {
     }
     case State::AWAITING_RESPONSE: {
       break;  // State changed by events
-      //this->signal_stop_();
     }
     case State::STREAMING_RESPONSE: {
       bool playing = false;
@@ -315,24 +347,17 @@ void VoiceAssistant::loop() {
 #endif
 #ifdef USE_MEDIA_PLAYER
       if (this->media_player_ != nullptr) {
-        playing = (this->media_player_->state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING);
+        playing = (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING);
 
-        if (playing && this->media_player_wait_for_announcement_start_) {
-          // Announcement has started playing, wait for it to finish
-          this->media_player_wait_for_announcement_start_ = false;
-          this->media_player_wait_for_announcement_end_ = true;
-        }
-
-        if (!playing && this->media_player_wait_for_announcement_end_) {
-          // Announcement has finished playing
-          this->media_player_wait_for_announcement_end_ = false;
+        if (this->media_player_response_state_ == MediaPlayerResponseState::FINISHED) {
+          this->media_player_response_state_ = MediaPlayerResponseState::IDLE;
           this->cancel_timeout("playing");
           ESP_LOGD(TAG, "Announcement finished playing");
           this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
 
           api::VoiceAssistantAnnounceFinished msg;
           msg.success = true;
-          this->api_client_->send_message(msg);
+          this->api_client_->send_message(msg, api::VoiceAssistantAnnounceFinished::MESSAGE_TYPE);
           break;
         }
       }
@@ -341,16 +366,16 @@ void VoiceAssistant::loop() {
         this->start_playback_timeout_();
       }
       else { 
-          //adding else to try and fix state transition bug 
-          // this in combination with remove "local_output" check fixed state issue
-          //state doesnt wait on speaker to finish, but it doesnt get hung any longer
-          this->cancel_timeout("playing");
-          ESP_LOGD(TAG, "Either media player not playing or speaker is not defined");
-          ESP_LOGD(TAG, "AttemptingCleaning up state");
-          this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
-          api::VoiceAssistantAnnounceFinished msg;
-          msg.success = true;
-          this->api_client_->send_message(msg);
+        // User Fix #3: Adding else to try and fix state transition bug 
+        // this in combination with remove "local_output" check fixed state issue
+        // state doesnt wait on speaker to finish, but it doesnt get hung any longer
+        this->cancel_timeout("playing");
+        ESP_LOGD(TAG, "Either media player not playing or speaker is not defined");
+        ESP_LOGD(TAG, "AttemptingCleaning up state");
+        this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
+        api::VoiceAssistantAnnounceFinished msg;
+        msg.success = true;
+        this->api_client_->send_message(msg, api::VoiceAssistantAnnounceFinished::MESSAGE_TYPE);
       }
       break;
     }
@@ -568,15 +593,19 @@ void VoiceAssistant::request_stop() {
       break;
     case State::AWAITING_RESPONSE:
       this->signal_stop_();
-      // Fallthrough intended to stop a streaming TTS announcement that has potentially started
+      break;
     case State::STREAMING_RESPONSE:
 #ifdef USE_MEDIA_PLAYER
       // Stop any ongoing media player announcement
       if (this->media_player_ != nullptr) {
-        // this->media_player_->make_call()
-        //     .set_command(media_player::MEDIA_PLAYER_COMMAND_STOP)
-        //     .set_announcement(true)
-        //     .perform();
+        this->media_player_->make_call()
+            .set_command(media_player::MEDIA_PLAYER_COMMAND_STOP)
+            .set_announcement(true)
+            .perform();
+      }
+      if (this->started_streaming_tts_) {
+        // Haven't reached the TTS_END stage, so send the stop signal to HA.
+        this->signal_stop_();
       }
 #endif
       break;
@@ -593,7 +622,7 @@ void VoiceAssistant::signal_stop_() {
   ESP_LOGD(TAG, "Signaling stop");
   api::VoiceAssistantRequest msg;
   msg.start = false;
-  this->api_client_->send_message(msg);
+  this->api_client_->send_message(msg, api::VoiceAssistantRequest::MESSAGE_TYPE);
 }
 
 void VoiceAssistant::start_playback_timeout_() {
@@ -603,7 +632,7 @@ void VoiceAssistant::start_playback_timeout_() {
 
     api::VoiceAssistantAnnounceFinished msg;
     msg.success = true;
-    this->api_client_->send_message(msg);
+    this->api_client_->send_message(msg, api::VoiceAssistantAnnounceFinished::MESSAGE_TYPE);
   });
 }
 
@@ -661,12 +690,19 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       if (this->media_player_ != nullptr) {
         for (const auto &arg : msg.data) {
           if ((arg.name == "tts_start_streaming") && (arg.value == "1") && !this->tts_response_url_.empty()) {
+            this->media_player_response_state_ = MediaPlayerResponseState::URL_SENT;
+
+            // User Fix #4: Comment out audio transmission to ESP media player during streaming
             // this->media_player_->make_call().set_media_url(this->tts_response_url_).set_announcement(true).perform();
-            this->media_player_wait_for_announcement_start_ = true;
-            this->media_player_wait_for_announcement_end_ = false;
+
             this->started_streaming_tts_ = true;
+            
+            // User Fix #4: Comment out timeout for ESP audio processing
+            // this->start_playback_timeout_();
+
             tts_url_for_trigger = this->tts_response_url_;
             this->tts_response_url_.clear();  // Reset streaming URL
+            this->set_state_(State::STREAMING_RESPONSE, State::STREAMING_RESPONSE);
           }
         }
       }
@@ -725,20 +761,27 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       this->defer([this, url]() {
 #ifdef USE_MEDIA_PLAYER
         if ((this->media_player_ != nullptr) && (!this->started_streaming_tts_)) {
+          this->media_player_response_state_ = MediaPlayerResponseState::URL_SENT;
+
+          // User Fix #3: Comment out audio transmission to ESP media player
           // this->media_player_->make_call().set_media_url(url).set_announcement(true).perform();
-          this->media_player_wait_for_announcement_start_ = true;
-          this->media_player_wait_for_announcement_end_ = false;
-          // Start the playback timeout, as the media player state isn't immediately updated
+
+          // User Fix #3: Comment out timeout for ESP audio processing  
           // this->start_playback_timeout_();
         }
+        this->started_streaming_tts_ = false;  // Helps indicate reaching the TTS_END stage
 #endif
         this->tts_end_trigger_->trigger(url);
       });
-
+      // User Fix #2: Comment out conditional state logic and force STREAMING_RESPONSE
+      // This in combination with the "else" at end of streaming response fixed state issue  
       //State new_state = this->local_output_ ? State::STREAMING_RESPONSE : State::IDLE;
-      //this in comobination with the "else" at end of streaming response fixed state issue
       State new_state = State::STREAMING_RESPONSE;
-      this->set_state_(new_state, new_state);
+      if (new_state != this->state_) {
+        // Don't needlessly change the state. The intent progress stage may have already changed the state to streaming
+        // response.
+        this->set_state_(new_state, new_state);
+      }
       break;
     }
     case api::enums::VOICE_ASSISTANT_RUN_END: {
@@ -889,23 +932,28 @@ void VoiceAssistant::on_announce(const api::VoiceAssistantAnnounceRequest &msg) 
 #ifdef USE_MEDIA_PLAYER
   if (this->media_player_ != nullptr) {
     this->tts_start_trigger_->trigger(msg.text);
+
+    this->media_player_response_state_ = MediaPlayerResponseState::URL_SENT;
+
     if (!msg.preannounce_media_id.empty()) {
-      // this->media_player_->make_call().set_media_url(msg.preannounce_media_id).set_announcement(true).perform();
+      this->media_player_->make_call().set_media_url(msg.preannounce_media_id).set_announcement(true).perform();
     }
-    // this->media_player_->make_call()
-    //     .set_command(media_player::MEDIA_PLAYER_COMMAND_ENQUEUE)
-    //     .set_media_url(msg.media_id)
-    //     .set_announcement(true)
-    //     .perform();
+    // Enqueueing a URL with an empty playlist will still play the file immediately
+    this->media_player_->make_call()
+        .set_command(media_player::MEDIA_PLAYER_COMMAND_ENQUEUE)
+        .set_media_url(msg.media_id)
+        .set_announcement(true)
+        .perform();
     this->continue_conversation_ = msg.start_conversation;
-    this->media_player_wait_for_announcement_start_ = true;
-    this->media_player_wait_for_announcement_end_ = false;
-    // this->start_playback_timeout_();
+
+    this->start_playback_timeout_();
+
     if (this->continuous_) {
       this->set_state_(State::STOP_MICROPHONE, State::STREAMING_RESPONSE);
     } else {
       this->set_state_(State::STREAMING_RESPONSE, State::STREAMING_RESPONSE);
     }
+
     this->tts_end_trigger_->trigger(msg.media_id);
     this->end_trigger_->trigger();
   }

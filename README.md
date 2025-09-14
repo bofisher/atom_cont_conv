@@ -1,15 +1,20 @@
 
 # Atom Echo – Continued-Conversation Satellite
 
-> **⚠️ IMPORTANT UPDATE - ESPHome 2025.8.3**
+> **⚠️ IMPORTANT UPDATE - ESPHome 2025.9**
 > 
-> **The custom voice_assistant component in this repository is no longer needed!**
+> **The custom voice_assistant component in this repository IS REQUIRED for external audio setups!**
 > 
-> ESPHome 2025.8.3 has fixed the voice satellite entity state bug where the state would get stuck in "Idle" instead of properly transitioning through idle → processing → responding → idle. The `esphome/custom_components/voice_assistant/` folder in this repository is now **deprecated** and should not be used.
+> While ESPHome has improved significantly, the voice_assistant component still has critical issues when using external audio systems (like Sonos speakers) instead of ESP32 onboard speakers. The `esphome/custom_components/voice_assistant/` folder contains essential fixes for:
 > 
-> **For new installations:** Simply use the standard ESPHome voice_assistant component with ESPHome 2025.8.3 or later.
+> - **State machine completion** - Prevents getting stuck in "Responding" state
+> - **External audio coordination** - Proper state transitions with Sonos/external speakers
+> - **Continue conversation functionality** - Enables multi-turn conversations
+> - **Ask question support** - Allows HA to programmatically start voice interactions
 > 
-> **For existing installations:** Remove the custom_components folder from your ESPHome config and update to ESPHome 2025.8.3+.
+> **For external audio setups:** Use the custom voice_assistant component from this repository.
+> 
+> **For onboard ESP speaker setups:** The standard ESPHome component may work, but this version is recommended for reliability.
 
 ---
 
@@ -33,7 +38,7 @@
 | **`device_specific_firmware.yaml`** | Device-specific ESPHome config, includes the main firmware, sets min ESPHome version, WiFi, encryption, etc. |
 | **`play_tts_message_v2.yaml`** | Home Assistant script that plays TTS/ack audio, toggles `input_boolean.tts_playing`, inserts delays based on transcript word count |
 | **`mww_training_w_cuda_requirements.txt`** | Python requirements for MicroWakeWord model training (TensorFlow, PyTorch, etc.) |
-| **`esphome/custom_components/`** | **⚠️ DEPRECATED** - Custom voice_assistant component (no longer needed as of ESPHome 2025.8.3) |
+| **`esphome/custom_components/`** | **✅ REQUIRED for external audio** - Custom voice_assistant component with critical fixes for external audio setups (Sonos, etc.) |
 
 ---
 
@@ -155,16 +160,17 @@ You can chain multiple `assist_satellite.ask_question` calls in your automations
 
 * Home Assistant 2025.4 – [Continued Conversation with LLMs](https://www.home-assistant.io/blog/2025/04/02/release-20254/#continued-conversation-with-llms)  
 * ESPHome MicroWakeWord component – <https://esphome.io/components/micro_wake_word.html>
-* ESPHome minimum version required: **2025.8.3** (voice satellite state bug fix)
+* ESPHome minimum version required: **2025.9.0** (with custom voice_assistant component for external audio fixes)
 * MicroWakeWord model training requirements: see `mww_training_w_cuda_requirements.txt`
 
 ---
 
 ## Version History
 
-- **2025-09-10**: Updated for ESPHome 2025.8.3 - custom voice_assistant component no longer needed
+- **2025-09-14**: Updated for ESPHome 2025.9 - custom voice_assistant component REQUIRED for external audio setups (contains critical state machine and audio coordination fixes)
+- **2025-09-10**: Updated for ESPHome 2025.8.3 - custom voice_assistant component no longer needed (INCORRECT - later discovered still needed for external audio)
 - **2025-07-27**: Initial release with custom voice_assistant workarounds
 
 ---
 
-*README updated 2025-09-10*
+*README updated 2025-09-14*
